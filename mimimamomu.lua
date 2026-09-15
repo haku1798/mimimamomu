@@ -2704,6 +2704,291 @@ do
 end
 
 -- ============================================
+-- MINIMAP RADAR (category-based, no mobs/players)
+-- ============================================
+do
+    local radarConn  = nil
+    local drawings   = nil
+    local MAX_DOTS   = 400
+
+    -- Categories shown on radar, with the ESP keys they map to.
+    local CATEGORY_KEYS = {
+        "Gun", "Melee", "Medical", "Armor", "Food",
+        "Resource", "Carpart", "Fuel", "Ammunition", "Ability",
+    }
+
+    local function ensureDrawings()
+        if drawings then return drawings end
+        drawings = {
+            background = Drawing.new("Circle"),
+            border     = Drawing.new("Circle"),
+            ring1      = Drawing.new("Circle"),
+            ring2      = Drawing.new("Circle"),
+            ring3      = Drawing.new("Circle"),
+            centerDot  = Drawing.new("Circle"),
+            cone       = Drawing.new("Triangle"),
+            dots       = {},
+        }
+        drawings.background.Filled = true
+        drawings.background.NumSides = 64
+        drawings.background.Color = Color3.fromRGB(12, 12, 18)
+        drawings.background.Thickness = 0
+        drawings.background.Visible = false
+
+        drawings.border.Filled = false
+        drawings.border.NumSides = 64
+        drawings.border.Color = Color3.fromRGB(90, 90, 110)
+        drawings.border.Thickness = 1.5
+        drawings.border.Visible = false
+
+        for _, ring in ipairs({drawings.ring1, drawings.ring2, drawings.ring3}) do
+            ring.Filled = false
+            ring.NumSides = 48
+            ring.Color = Color3.fromRGB(70, 70, 90)
+            ring.Transparency = 0.55
+            ring.Thickness = 1
+            ring.Visible = false
+        end
+
+        drawings.centerDot.Filled = true
+        drawings.centerDot.NumSides = 16
+        drawings.centerDot.Color = Color3.fromRGB(120, 220, 255)
+        drawings.centerDot.Radius = 3
+        drawings.centerDot.Visible = false
+
+        drawings.cone.Filled = true
+        drawings.cone.Color = Color3.fromRGB(120, 220, 255)
+        drawings.cone.Transparency = 0.35
+        drawings.cone.Visible = false
+
+        for i = 1, MAX_DOTS do
+            local d = Drawing.new("Circle")
+            d.Filled = true
+            d.NumSides = 8
+            d.Radius = 3
+            d.Transparency = 1
+            d.Visible = false
+            drawings.dots[i] = d
+        end
+        return drawings
+    end
+
+    local function hideAll()
+        if not drawings then return end
+        drawings.background.Visible = false
+        drawings.border.Visible     = false
+        drawings.ring1.Visible      = false
+        drawings.ring2.Visible      = false
+        drawings.ring3.Visible      = false
+        drawings.centerDot.Visible  = false
+        drawings.cone.Visible       = false
+        for _, d in ipairs(drawings.dots) do d.Visible = false end
+    end
+
+    -- Build a "which category is enabled" lookup on demand
+    local function getEnabledCategories()
+        local enabled = {}
+        for _, key in ipairs(CATEGORY_KEYS) do
+            local t = Toggles["Radar" .. key]
+            if t and t.Value then enabled[key] = true end
+        end
+        return enabled
+    end
+
+    local function collectTargets(myPos, range)
+        local out = {}
+        local r2 = range * range
+
+        -- Items (all enabled categories scanned in one pass)
+        local enabled = getEnabledCategories()
+        local anyEnabled = next(enabled) ~= nil
+        if anyEnabled and S.droppedItemsFolder then
+            for _, item in ipairs(S.droppedItemsFolder:GetChildren()) do
+                local matchedKey = nil
+                for key, _ in pairs(enabled) do
+                    local sys = S.espSystems[key]
+                    if sys and sys.itemList[item.Name] then matchedKey = key; break end
+                end
+                if matchedKey then
+                    local mp = item.PrimaryPart or S.getItemMainPart(item)
+                    if mp then
+                        local dx, dz = mp.Position.X - myPos.X, mp.Position.Z - myPos.Z
+                        if dx*dx + dz*dz <= r2 then
+                            local col = S.espSystems[matchedKey].colors.fill
+                            table.insert(out, { pos = mp.Position, color = col, size = 2.5 })
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Chests
+        if Toggles.RadarChests and Toggles.RadarChests.Value then
+            local map = Workspace:FindFirstChild("Map")
+            local crates = map and map:FindFirstChild("Crates")
+            if crates then
+                for _, c in ipairs(crates:GetDescendants()) do
+                    if c:IsA("Model") then
+                        local n = c.Name:lower()
+                        if n == "default" or n == "super" or n == "emerald" then
+                            local mp = c.PrimaryPart
+                            if not mp then
+                                for _, ch in ipairs(c:GetChildren()) do
+                                    if ch:IsA("BasePart") then mp = ch; break end
+                                end
+                            end
+                            if mp then
+                                local dx, dz = mp.Position.X - myPos.X, mp.Position.Z - myPos.Z
+                                if dx*dx + dz*dz <= r2 then
+                                    local col = Color3.fromRGB(255, 215, 0)
+                                    if n == "super" then col = Color3.fromRGB(255, 0, 255)
+                                    elseif n == "emerald" then col = Color3.fromRGB(0, 255, 80) end
+                                    table.insert(out, { pos = mp.Position, color = col, size = 5 })
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Structures
+        if Toggles.RadarStructures and Toggles.RadarStructures.Value and S.structuresFolder then
+            for _, s in ipairs(S.structuresFolder:GetChildren()) do
+                if s:IsA("Model") then
+                    local mp = s.PrimaryPart or S.getItemMainPart(s)
+                    if mp then
+                        local dx, dz = mp.Position.X - myPos.X, mp.Position.Z - myPos.Z
+                        if dx*dx + dz*dz <= r2 then
+                            table.insert(out, { pos = mp.Position, color = Color3.fromRGB(0, 200, 150), size = 3 })
+                        end
+                    end
+                end
+            end
+        end
+
+        return out
+    end
+
+    local function updateRadar()
+        if not (Toggles.Radar and Toggles.Radar.Value) then
+            hideAll()
+            return
+        end
+
+        local d = ensureDrawings()
+        local char = S.getLocalCharacter()
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local camera = Workspace.CurrentCamera
+        if not hrp or not camera then hideAll(); return end
+
+        local radarSize    = Options.RadarSize and Options.RadarSize.Value or 150
+        local range        = Options.RadarRange and Options.RadarRange.Value or 300
+        local offX         = Options.RadarOffsetX and Options.RadarOffsetX.Value or 180
+        local offY         = Options.RadarOffsetY and Options.RadarOffsetY.Value or 180
+        local transparency = Options.RadarTransparency and Options.RadarTransparency.Value or 0.7
+        local rotate       = Toggles.RadarRotate and Toggles.RadarRotate.Value
+        local rings        = Toggles.RadarShowRings and Toggles.RadarShowRings.Value
+
+        local center = Vector2.new(offX, offY)
+        local radarRadius = radarSize
+        local scale = radarRadius / range
+
+        local look = camera.CFrame.LookVector
+        local camLx, camLz = look.X, look.Z
+        local hMag = math.sqrt(camLx*camLx + camLz*camLz)
+        if hMag > 0.001 then camLx, camLz = camLx/hMag, camLz/hMag else camLx, camLz = 0, -1 end
+
+        local bFwdX, bFwdZ, bRightX, bRightZ
+        if rotate then
+            bFwdX, bFwdZ = camLx, camLz
+            bRightX, bRightZ = -camLz, camLx
+        else
+            bFwdX, bFwdZ = 0, -1
+            bRightX, bRightZ = 1, 0
+        end
+
+        d.background.Position = center
+        d.background.Radius = radarRadius
+        d.background.Transparency = transparency
+        d.background.Visible = true
+
+        d.border.Position = center
+        d.border.Radius = radarRadius
+        d.border.Visible = true
+
+        if rings then
+            local rs = { d.ring1, d.ring2, d.ring3 }
+            for i = 1, 3 do
+                rs[i].Position = center
+                rs[i].Radius = radarRadius * (i / 4)
+                rs[i].Visible = true
+            end
+        else
+            d.ring1.Visible = false; d.ring2.Visible = false; d.ring3.Visible = false
+        end
+
+        d.centerDot.Position = center
+        d.centerDot.Visible = true
+
+        local fwdSX = camLx * bRightX + camLz * bRightZ
+        local fwdSY = -(camLx * bFwdX + camLz * bFwdZ)
+        local fLen = math.sqrt(fwdSX*fwdSX + fwdSY*fwdSY)
+        if fLen > 0.001 then fwdSX, fwdSY = fwdSX/fLen, fwdSY/fLen end
+
+        local coneLen = radarRadius * 0.35
+        local spread = math.rad(28)
+        local cs, sn = math.cos(spread), math.sin(spread)
+        local ax = fwdSX * cs - fwdSY * sn
+        local ay = fwdSX * sn + fwdSY * cs
+        local bx = fwdSX * cs + fwdSY * sn
+        local by = -fwdSX * sn + fwdSY * cs
+
+        d.cone.PointA = center
+        d.cone.PointB = center + Vector2.new(ax, ay) * coneLen
+        d.cone.PointC = center + Vector2.new(bx, by) * coneLen
+        d.cone.Visible = true
+
+        local targets = collectTargets(hrp.Position, range)
+        local poolIdx = 1
+        local myX, myZ = hrp.Position.X, hrp.Position.Z
+        local r2 = radarRadius * radarRadius
+
+        for _, t in ipairs(targets) do
+            if poolIdx > MAX_DOTS then break end
+            local dx, dz = t.pos.X - myX, t.pos.Z - myZ
+            local sx = dx * bRightX + dz * bRightZ
+            local sy = -(dx * bFwdX + dz * bFwdZ)
+            local px = center.X + sx * scale
+            local py = center.Y + sy * scale
+            local ddx, ddy = px - center.X, py - center.Y
+            if ddx*ddx + ddy*ddy <= r2 then
+                local dot = d.dots[poolIdx]
+                dot.Position = Vector2.new(px, py)
+                dot.Color = t.color
+                dot.Radius = t.size or 3
+                dot.Visible = true
+                poolIdx = poolIdx + 1
+            end
+        end
+        for i = poolIdx, MAX_DOTS do
+            if d.dots[i].Visible then d.dots[i].Visible = false end
+        end
+    end
+
+    function S.stopRadar()
+        if radarConn then radarConn:Disconnect(); radarConn = nil end
+        hideAll()
+    end
+
+    function S.startRadar()
+        S.stopRadar()
+        ensureDrawings()
+        radarConn = RunService.RenderStepped:Connect(updateRadar)
+    end
+end
+
+-- ============================================
 -- REPAIR AURA
 -- ============================================
 do
@@ -3379,7 +3664,7 @@ Library:OnUnload(function()
     S.connections = {}
         S.stopAutoPickup(); S.stopBringPickup(); S.stopRepairAura(); S.stopAutoSprint(); S.stopKillAura()
         S.stopAimbot(); S.stopSilentAim(); S.stopBhop(); S.stopFunnyDance(); S.stopRemoteSpy()
-    S.stopAutoShoot(); S.stopAutoReload(); S.stopObjectIdentifier(); S.stopChestESP()
+    S.stopAutoShoot(); S.stopAutoReload(); S.stopObjectIdentifier(); S.stopChestESP(); S.stopRadar()
     pcall(function() if setfpscap then setfpscap(60) end end)
     if S.fovCircle then pcall(function() S.fovCircle:Remove() end); S.fovCircle = nil end
     if Toggles.RemoveFog and Toggles.RemoveFog.Value then S.disableRemoveFog() end
@@ -3397,6 +3682,49 @@ do
     Toggle:AddKeyPicker("KeyPicker", {
         Default = "K", Mode = "Toggle", Text = "Example keybind", NoUI = false,
     })
+
+    -- ============================================
+    -- MINIMAP RADAR (keybinds tab)
+    -- ============================================
+    local radarGroup = Tabs.Keybinds:AddLeftGroupbox("Minimap Radar", "map")
+
+    radarGroup:AddToggle("Radar", {
+        Text = "Enable Radar", Default = false,
+        Callback = function(st) if st then S.startRadar() else S.stopRadar() end end,
+    }):AddKeyPicker("RadarKeybind", {
+        Default = "M", Mode = "Toggle", Text = "Toggle Radar",
+    })
+
+    radarGroup:AddToggle("RadarRotate",    { Text = "Rotate with Camera", Default = true })
+    radarGroup:AddToggle("RadarShowRings", { Text = "Show Distance Rings", Default = true })
+    radarGroup:AddDivider()
+    radarGroup:AddSlider("RadarSize",    { Text = "Size",     Default = 150, Min = 60, Max = 260, Rounding = 0 })
+    radarGroup:AddSlider("RadarRange",   { Text = "Range",    Default = 300, Min = 100, Max = 1000, Rounding = 0, Suffix = " studs" })
+    radarGroup:AddSlider("RadarOffsetX", { Text = "Position X", Default = 180, Min = 0, Max = 2000, Rounding = 0 })
+    radarGroup:AddSlider("RadarOffsetY", { Text = "Position Y", Default = 180, Min = 0, Max = 2000, Rounding = 0 })
+    radarGroup:AddSlider("RadarTransparency", { Text = "Background Alpha", Default = 0.7, Min = 0.0, Max = 0.95, Rounding = 2 })
+
+    radarGroup:AddDivider()
+    radarGroup:AddLabel("Item Categories", { DoesWrap = true })
+
+            radarcategory = Tabs.Keybinds:AddRightGroupbox("Minimap Radar", "map")
+
+    -- Toggle key names must match CATEGORY_KEYS inside the radar block.
+    radarcategory:AddToggle("RadarGun",        { Text = "Gun",        Default = true })
+    radarcategory:AddToggle("RadarMelee",      { Text = "Melee",      Default = false })
+    radarcategory:AddToggle("RadarMedical",    { Text = "Medical",    Default = true })
+    radarcategory:AddToggle("RadarArmor",      { Text = "Armor",      Default = false })
+    radarcategory:AddToggle("RadarFood",       { Text = "Food",       Default = false })
+    radarcategory:AddToggle("RadarResource",   { Text = "Resources",  Default = false })
+    radarcategory:AddToggle("RadarCarpart",    { Text = "Car Parts",  Default = false })
+    radarcategory:AddToggle("RadarFuel",       { Text = "Fuel",       Default = false })
+    radarcategory:AddToggle("RadarAmmunition", { Text = "Ammunition", Default = true })
+    radarcategory:AddToggle("RadarAbility",    { Text = "Abilities",  Default = false })
+
+    radarcategory:AddDivider()
+    radarcategory:AddLabel("World Objects", { DoesWrap = true })
+    radarcategory:AddToggle("RadarChests",     { Text = "Chests",     Default = true })
+    radarcategory:AddToggle("RadarStructures", { Text = "Structures", Default = false })
 end
 
 -- ============================================
