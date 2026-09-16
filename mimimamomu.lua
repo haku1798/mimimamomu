@@ -213,7 +213,7 @@ function S.discoverFolders()
 end
 S.discoverFolders()
 
--- Forward declarations for cross-section functions used by UI / unload
+-- Forward declarations
 S.refreshMobESP = nil
 S.refreshPlayerESP = nil
 S.refreshStructureESP = nil
@@ -529,8 +529,7 @@ do
     end
     table.sort(itemNames)
     S.itemNames = itemNames
-
-    S.pickupItemNames = itemNames  -- reused by UI
+    S.pickupItemNames = itemNames
 
     local structureNames = {
         "Ammo Crate","Barbed Wire","Bear Trap","Boost Pad","Electric Fence",
@@ -544,7 +543,6 @@ do
     local playerESPVars = S.playerESPVars
     local structureESPVars = S.structureESPVars
 
-    -- Category ESP
     local function createCategoryESP(sys, item)
         if not item:IsA("Model") then return end
         if sys.instances[item] then return end
@@ -1553,15 +1551,15 @@ do
 end
 
 -- ============================================
--- SILENT AIM (hooks Bullet.BulletHitscan / Projectile.CreateProjectile)
+-- SILENT AIM
 -- ============================================
 do
     local silentAimConn       = nil
     local silentAimTarget     = nil
     local oldBulletHitscan    = nil
     local oldCreateProjectile = nil
-    local BulletMod           = nil
-    local ProjectileMod       = nil
+    local BulletMod            = nil
+    local ProjectileMod        = nil
     local silentAimRayParams  = nil
 
     local function refreshRayParams()
@@ -1667,7 +1665,7 @@ do
         S.stopSilentAim()
 
         local modules = ReplicatedStorage:FindFirstChild("Modules")
-        local combat  = modules and modules:FindFirstChild("Combat")
+        local combat   = modules and modules:FindFirstChild("Combat")
         local bulletScript     = combat and combat:FindFirstChild("Bullet")
         local projectileScript = combat and combat:FindFirstChild("Projectile")
 
@@ -1721,16 +1719,13 @@ do
 end
 
 -- ============================================
--- AUTO SHOOT / AUTO RELOAD (pellet-aware, per-slot threads)
+-- AUTO SHOOT / AUTO RELOAD
 -- ============================================
 do
     local lastShootTimePerSlot = S.lastShootTimePerSlot
 
     S.raSlotReloading = S.raSlotReloading or { [1]=false, [2]=false, [3]=false, [4]=false }
 
-    -- ============================================================
-    -- DETECTION
-    -- ============================================================
     local function isRemoteArsenal(tool)
         if not tool then return false end
         return tool:FindFirstChild("SetWeaponsClient") ~= nil
@@ -1739,9 +1734,6 @@ do
     end
     S.isRemoteArsenal = isRemoteArsenal
 
-    -- ============================================================
-    -- REMOTE ARSENAL HELPERS
-    -- ============================================================
     local function getRemoteArsenalSlots(arsenal)
         if not arsenal then return nil end
         local cached = S.remoteArsenalSlotCache[arsenal]
@@ -1820,7 +1812,6 @@ do
         return 60 / (rpm * charMod * arsenalMod)
     end
 
-    -- NEW: read pellet count from a Remote Arsenal slot
     local function getPelletsForRA(slotData)
         if not slotData then return 1 end
         if slotData.stats then
@@ -1834,9 +1825,6 @@ do
         return 1
     end
 
-    -- ============================================================
-    -- NORMAL WEAPON HELPERS
-    -- ============================================================
     local function getAmmoValue(tool)
         if not tool then return nil end
         local a = tool:GetAttribute("Ammo"); if typeof(a) == "number" then return a end
@@ -1874,7 +1862,6 @@ do
         return 1.5
     end
 
-    -- NEW: read pellet count from a normal weapon
     local function getPelletsForNormal(tool)
         if not tool then return 1 end
         local stats = tool:FindFirstChild("Stats")
@@ -1887,9 +1874,6 @@ do
         return 1
     end
 
-    -- ============================================================
-    -- SHOOT REMOTE + TARGETING
-    -- ============================================================
     local function getShootRemote()
         local ps = LocalPlayer:FindFirstChild("Shoot")
         if ps and (ps:IsA("RemoteEvent") or ps:IsA("RemoteFunction")) then return ps end
@@ -1901,223 +1885,207 @@ do
         return nil
     end
 
- -- ============================================================
--- LINE OF SIGHT (anti wallbang)
--- ============================================================
-local losParams = RaycastParams.new()
-losParams.FilterType = Enum.RaycastFilterType.Exclude
-losParams.IgnoreWater  = true
+    local losParams = RaycastParams.new()
+    losParams.FilterType = Enum.RaycastFilterType.Exclude
+    losParams.IgnoreWater  = true
 
-local function hasLineOfSight(fromPos, toPart, targetChar, myChar)
-    losParams.FilterDescendantsInstances = { myChar, targetChar }
-    local result = Workspace:Raycast(fromPos, toPart.Position - fromPos, losParams)
-    return result == nil
-end
-
-local function getTargetForAutoShoot()
-    local char = S.getLocalCharacter(); if not char then return nil end
-    local myRoot = char:FindFirstChild("HumanoidRootPart"); if not myRoot then return nil end
-    local range = Options.AutoShootRange and Options.AutoShootRange.Value or 300
-    local mode = Options.AutoShootTarget and Options.AutoShootTarget.Value or "Mobs"
-    local aimPart = Options.AutoShootPart and Options.AutoShootPart.Value or "Head"
-    local priority = Options.AutoShootPriority and Options.AutoShootPriority.Value or "Nearest"
-
-    local camera  = Workspace.CurrentCamera
-    local head    = char:FindFirstChild("Head")
-    local fromPos = (camera and camera.CFrame.Position) or (head and head.Position) or myRoot.Position
-
-    local candidates = {}
-
-    local function check(tChar)
-        if not tChar or tChar == char then return end
-        local part = tChar:FindFirstChild(aimPart) or tChar:FindFirstChild("HumanoidRootPart")
-        if not part then return end
-        local dist = (part.Position - myRoot.Position).Magnitude
-        if dist > range then return end
-        local hum = tChar:FindFirstChildOfClass("Humanoid")
-        if hum and hum.Health <= 0 then return end
-        if not hasLineOfSight(fromPos, part, tChar, char) then return end
-        table.insert(candidates, {
-            character = tChar,
-            part = part,
-            dist = dist,
-            health = hum and hum.Health or math.huge,
-        })
+    local function hasLineOfSight(fromPos, toPart, targetChar, myChar)
+        losParams.FilterDescendantsInstances = { myChar, targetChar }
+        local result = Workspace:Raycast(fromPos, toPart.Position - fromPos, losParams)
+        return result == nil
     end
 
-    if mode == "Mobs" or mode == "Both" then
-        if S.charactersFolder then
-            for _, mob in ipairs(S.charactersFolder:GetChildren()) do
-                if table.find(S.mobNames, mob.Name) then check(mob) end
-            end
+    local function getTargetForAutoShoot()
+        local char = S.getLocalCharacter(); if not char then return nil end
+        local myRoot = char:FindFirstChild("HumanoidRootPart"); if not myRoot then return nil end
+        local range = Options.AutoShootRange and Options.AutoShootRange.Value or 300
+        local mode = Options.AutoShootTarget and Options.AutoShootTarget.Value or "Mobs"
+        local aimPart = Options.AutoShootPart and Options.AutoShootPart.Value or "Head"
+        local priority = Options.AutoShootPriority and Options.AutoShootPriority.Value or "Nearest"
+
+        local camera  = Workspace.CurrentCamera
+        local head    = char:FindFirstChild("Head")
+        local fromPos = (camera and camera.CFrame.Position) or (head and head.Position) or myRoot.Position
+
+        local candidates = {}
+
+        local function check(tChar)
+            if not tChar or tChar == char then return end
+            local part = tChar:FindFirstChild(aimPart) or tChar:FindFirstChild("HumanoidRootPart")
+            if not part then return end
+            local dist = (part.Position - myRoot.Position).Magnitude
+            if dist > range then return end
+            local hum = tChar:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health <= 0 then return end
+            if not hasLineOfSight(fromPos, part, tChar, char) then return end
+            table.insert(candidates, {
+                character = tChar,
+                part = part,
+                dist = dist,
+                health = hum and hum.Health or math.huge,
+            })
         end
-    end
-    if mode == "Players" or mode == "Both" then
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p ~= LocalPlayer then
-                local pc = p.Character or (S.charactersFolder and S.charactersFolder:FindFirstChild(p.Name))
-                if pc then check(pc) end
-            end
-        end
-    end
 
-    if #candidates == 0 then return nil end
-
-    if priority == "Nearest" then
-        table.sort(candidates, function(a, b) return a.dist < b.dist end)
-    elseif priority == "Farthest" then
-        table.sort(candidates, function(a, b) return a.dist > b.dist end)
-    elseif priority == "Lowest HP" then
-        table.sort(candidates, function(a, b) return a.health < b.health end)
-    elseif priority == "Highest HP" then
-        table.sort(candidates, function(a, b) return a.health > b.health end)
-    end
-
-    return candidates[1]
-end
-
-
--- ============================================================
--- RICOCHET ELIGIBILITY
--- ============================================================
-local MAX_RICOCHET_HOPS = 10
-
-local function hasToolInInventory(name)
-    local char = S.getLocalCharacter()
-    if not char then return false end
-    if char:FindFirstChild(name) then return true end
-    local bp = LocalPlayer:FindFirstChild("Backpack")
-    if bp and bp:FindFirstChild(name) then return true end
-    return false
-end
-
-function S.isRicochetEligible()
-    local char = S.getLocalCharacter()
-    if not char then return false end
-
-    -- Class / perk check
-    for _, attrName in ipairs({ "Perk", "Class", "ClassName", "Role", "PlayerClass" }) do
-        local v = char:GetAttribute(attrName)
-        if typeof(v) == "string" and v:lower() == "outlaw" then return true end
-    end
-
-    -- Inventory check
-    if hasToolInInventory("Heavy Revolver") then return true end
-    if hasToolInInventory("Quickdraw") then return true end
-
-    -- Also honour server-set ricochet attributes if present
-    local maxR = char:GetAttribute("RicochetMax")
-    if typeof(maxR) == "number" and maxR > 0 then return true end
-    local chance = char:GetAttribute("RicochetChance")
-    if typeof(chance) == "number" and chance > 0 then return true end
-
-    return false
-end
-
-function S.getRicochetMax()
-    return MAX_RICOCHET_HOPS
-end
-
--- Collect the nearest N live characters (excluding the local player).
-local function collectRicochetTargets(maxCount)
-    local char = S.getLocalCharacter()
-    if not char then return {} end
-    local myRoot = char:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return {} end
-    if not S.charactersFolder then return {} end
-
-    local range = Options.AutoShootRange and Options.AutoShootRange.Value or 300
-    local myPos = myRoot.Position
-    local list  = {}
-
-    for _, m in ipairs(S.charactersFolder:GetChildren()) do
-        if m:IsA("Model") and m ~= char then
-            local hum = m:FindFirstChildOfClass("Humanoid")
-            local hrp = m:FindFirstChild("HumanoidRootPart")
-            if hum and hrp and hum.Health > 0 then
-                local d = (hrp.Position - myPos).Magnitude
-                if d <= range then
-                    table.insert(list, { mob = m, dist = d })
+        if mode == "Mobs" or mode == "Both" then
+            if S.charactersFolder then
+                for _, mob in ipairs(S.charactersFolder:GetChildren()) do
+                    if table.find(S.mobNames, mob.Name) then check(mob) end
                 end
             end
         end
-    end
-    table.sort(list, function(a, b) return a.dist < b.dist end)
-
-    local out = {}
-    for i = 1, math.min(maxCount, #list) do out[i] = list[i].mob end
-    return out
-end
-
-local function pickPartForRicochet(mob, forceHead)
-    if forceHead then
-        local head = mob:FindFirstChild("Head")
-        if head then return head end
-    end
-    return mob:FindFirstChild("Head")
-        or mob:FindFirstChild("Torso")
-        or mob:FindFirstChild("HumanoidRootPart")
-        or mob:FindFirstChildWhichIsA("BasePart")
-end
-
--- Build the ricochet chain payload. Returns originPos, hitTable or nil.
-local function buildRicochetPayload(target, originPos)
-    local maxHops = S.getRicochetMax()
-    local mobs    = collectRicochetTargets(maxHops)
-    if #mobs < 2 then return nil end
-
-    -- Ensure the player's chosen target is the first hop (headshot)
-    local chain = {}
-    local primaryMob = target and target.character
-    local usedSet = {}
-
-    if primaryMob and primaryMob.Parent then
-        table.insert(chain, { mob = primaryMob, part = pickPartForRicochet(primaryMob, true) })
-        usedSet[primaryMob] = true
-    end
-
-    for _, m in ipairs(mobs) do
-        if #chain >= maxHops then break end
-        if not usedSet[m] then
-            table.insert(chain, {
-                mob  = m,
-                part = pickPartForRicochet(m, #chain == 0),
-            })
-            usedSet[m] = true
+        if mode == "Players" or mode == "Both" then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer then
+                    local pc = p.Character or (S.charactersFolder and S.charactersFolder:FindFirstChild(p.Name))
+                    if pc then check(pc) end
+                end
+            end
         end
+
+        if #candidates == 0 then return nil end
+
+        if priority == "Nearest" then
+            table.sort(candidates, function(a, b) return a.dist < b.dist end)
+        elseif priority == "Farthest" then
+            table.sort(candidates, function(a, b) return a.dist > b.dist end)
+        elseif priority == "Lowest HP" then
+            table.sort(candidates, function(a, b) return a.health < b.health end)
+        elseif priority == "Highest HP" then
+            table.sort(candidates, function(a, b) return a.health > b.health end)
+        end
+
+        return candidates[1]
     end
 
-    if #chain < 2 then return nil end
+    local MAX_RICOCHET_HOPS = 10
 
-    local hitData       = {}
-    local effectResults = {}
-    local prevEnd       = originPos
+    local function hasToolInInventory(name)
+        local char = S.getLocalCharacter()
+        if not char then return false end
+        if char:FindFirstChild(name) then return true end
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        if bp and bp:FindFirstChild(name) then return true end
+        return false
+    end
 
-    for i, hop in ipairs(chain) do
-        local pos = hop.part.Position
-        local entry = {
-            HitChar = hop.mob,
-            HitPos  = pos,
-            HitPart = hop.part,
+    function S.isRicochetEligible()
+        local char = S.getLocalCharacter()
+        if not char then return false end
+
+        for _, attrName in ipairs({ "Perk", "Class", "ClassName", "Role", "PlayerClass" }) do
+            local v = char:GetAttribute(attrName)
+            if typeof(v) == "string" and v:lower() == "outlaw" then return true end
+        end
+
+        if hasToolInInventory("Heavy Revolver") then return true end
+        if hasToolInInventory("Quickdraw") then return true end
+
+        local maxR = char:GetAttribute("RicochetMax")
+        if typeof(maxR) == "number" and maxR > 0 then return true end
+        local chance = char:GetAttribute("RicochetChance")
+        if typeof(chance) == "number" and chance > 0 then return true end
+
+        return false
+    end
+
+    function S.getRicochetMax()
+        return MAX_RICOCHET_HOPS
+    end
+
+    local function collectRicochetTargets(maxCount)
+        local char = S.getLocalCharacter()
+        if not char then return {} end
+        local myRoot = char:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return {} end
+        if not S.charactersFolder then return {} end
+
+        local range = Options.AutoShootRange and Options.AutoShootRange.Value or 300
+        local myPos = myRoot.Position
+        local list  = {}
+
+        for _, m in ipairs(S.charactersFolder:GetChildren()) do
+            if m:IsA("Model") and m ~= char then
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                local hrp = m:FindFirstChild("HumanoidRootPart")
+                if hum and hrp and hum.Health > 0 then
+                    local d = (hrp.Position - myPos).Magnitude
+                    if d <= range then
+                        table.insert(list, { mob = m, dist = d })
+                    end
+                end
+            end
+        end
+        table.sort(list, function(a, b) return a.dist < b.dist end)
+
+        local out = {}
+        for i = 1, math.min(maxCount, #list) do out[i] = list[i].mob end
+        return out
+    end
+
+    local function pickPartForRicochet(mob, forceHead)
+        if forceHead then
+            local head = mob:FindFirstChild("Head")
+            if head then return head end
+        end
+        return mob:FindFirstChild("Head")
+            or mob:FindFirstChild("Torso")
+            or mob:FindFirstChild("HumanoidRootPart")
+            or mob:FindFirstChildWhichIsA("BasePart")
+    end
+
+    local function buildRicochetPayload(target, originPos)
+        local maxHops = S.getRicochetMax()
+        local mobs    = collectRicochetTargets(maxHops)
+        if #mobs < 2 then return nil end
+
+        local chain = {}
+        local primaryMob = target and target.character
+        local usedSet = {}
+
+        if primaryMob and primaryMob.Parent then
+            table.insert(chain, { mob = primaryMob, part = pickPartForRicochet(primaryMob, true) })
+            usedSet[primaryMob] = true
+        end
+
+        for _, m in ipairs(mobs) do
+            if #chain >= maxHops then break end
+            if not usedSet[m] then
+                table.insert(chain, {
+                    mob  = m,
+                    part = pickPartForRicochet(m, #chain == 0),
+                })
+                usedSet[m] = true
+            end
+        end
+
+        if #chain < 2 then return nil end
+
+        local hitData       = {}
+        local effectResults = {}
+        local prevEnd       = originPos
+
+        for i, hop in ipairs(chain) do
+            local pos = hop.part.Position
+            local entry = {
+                HitChar = hop.mob,
+                HitPos  = pos,
+                HitPart = hop.part,
+            }
+            if i > 1 then entry.Ricochet = true end
+            hitData[i] = entry
+
+            effectResults[i] = { Origin = prevEnd, End = pos }
+            prevEnd = pos
+        end
+
+        local pellet = {
+            Target        = chain[#chain].part.Position,
+            HitData       = hitData,
+            EffectResults = effectResults,
         }
-        if i > 1 then entry.Ricochet = true end
-        hitData[i] = entry
-
-        effectResults[i] = { Origin = prevEnd, End = pos }
-        prevEnd = pos
+        return originPos, { pellet }
     end
 
-    local pellet = {
-        Target        = chain[#chain].part.Position,
-        HitData       = hitData,
-        EffectResults = effectResults,
-    }
-    return originPos, { pellet }
-end
-
-        -- ============================================================
-    -- PAYLOAD BUILDER (pellet-aware, no spread)
-    -- ============================================================
     local function buildShotPayload(target, pelletCount)
         local char = S.getLocalCharacter(); if not char then return nil end
         local originPart = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
@@ -2160,10 +2128,7 @@ end
         end)
     end
 
-    -- ============================================================
-    -- RELOAD
-    -- ============================================================
-        local function reloadRaSlot(arsenal, slot)
+    local function reloadRaSlot(arsenal, slot)
         if S.raSlotReloading[slot] then return end
         local slotData = getRemoteArsenalSlot(slot, arsenal)
         if not slotData then return end
@@ -2177,12 +2142,10 @@ end
         S.raSlotReloading[slot] = true
 
         task.spawn(function()
-            local deadline = tick() + 5.0   -- hard cap: never hang forever
+            local deadline = tick() + 5.0
 
             pcall(function()
                 if reloadRemote:IsA("RemoteFunction") then
-                    -- InvokeServer can hang. Run it on a sub-thread and
-                    -- enforce a deadline ourselves.
                     local done, result = false, nil
                     task.spawn(function()
                         local ok, r = pcall(function() return reloadRemote:InvokeServer(nil, slot) end)
@@ -2200,7 +2163,6 @@ end
                 end
             end)
 
-            -- Wait for server replication, capped by the same deadline.
             while tick() < deadline do
                 if not arsenal.Parent then break end
                 local nowAmmo = getRemoteArsenalAmmo(slotData)
@@ -2208,7 +2170,6 @@ end
                 task.wait(0.05)
             end
 
-            -- ALWAYS clear the flag, no matter what happened above.
             S.raSlotReloading[slot] = false
             lastShootTimePerSlot[slot] = 0
         end)
@@ -2251,9 +2212,6 @@ end
         return true
     end
 
-    -- ============================================================
-    -- PATH A: REMOTE ARSENAL — one thread per slot
-    -- ============================================================
     S.raThreads = {}
     S.raActiveArsenal = nil
 
@@ -2267,10 +2225,9 @@ end
     end
     S.stopRaThreads = stopRaThreads
 
-        local function raSlotLoop(arsenal, slot)
+    local function raSlotLoop(arsenal, slot)
         local offsetOpt = Options.AutoShootOffset
         while Toggles.AutoShoot and Toggles.AutoShoot.Value do
-            -- Grace period for transient unparenting
             if not arsenal or not arsenal.Parent then
                 local grace = tick() + 0.5
                 while tick() < grace and (not arsenal or not arsenal.Parent) do
@@ -2279,8 +2236,6 @@ end
                 if not arsenal or not arsenal.Parent then break end
             end
 
-            -- One iteration, error-isolated. An error here logs a warning
-            -- and the loop continues on the next tick instead of dying.
             local ok, err = pcall(function()
                 if S.raSlotReloading[slot] then task.wait(0.05); return end
 
@@ -2305,7 +2260,6 @@ end
                 local originPos, hitTable = buildShotPayload(target, pelletCount)
                 if not originPos then task.wait(0.05); return end
 
-                -- Use the arsenal's own Shoot remote, not getShootRemote().
                 local shootRemote = arsenal:FindFirstChild("Shoot")
                 if not shootRemote then task.wait(0.1); return end
 
@@ -2350,51 +2304,43 @@ end
     end
     S.startRaThreads = startRaThreads
 
-    -- ============================================================
-    -- PATH B: NORMAL WEAPON
-    -- ============================================================
     local function fireNormalWeapon(tool, shootRemote)
-    local currentAmmo = tool:GetAttribute("Ammo") or getAmmoValue(tool)
-    if currentAmmo and currentAmmo <= 0 then return end
+        local currentAmmo = tool:GetAttribute("Ammo") or getAmmoValue(tool)
+        if currentAmmo and currentAmmo <= 0 then return end
 
-    local target = getTargetForAutoShoot()
-    if not target then return end
+        local target = getTargetForAutoShoot()
+        if not target then return end
 
-    local pelletCount = getPelletsForNormal(tool)
-    local originPos, hitTable = buildShotPayload(target, pelletCount)
-    if not originPos then return end
+        local pelletCount = getPelletsForNormal(tool)
+        local originPos, hitTable = buildShotPayload(target, pelletCount)
+        if not originPos then return end
 
-    local offsetOpt = Options.AutoShootOffset
-    local offset = (offsetOpt and typeof(offsetOpt.Value) == "number") and offsetOpt.Value or 0.05
-    local rate = getWeaponFireRate(tool) + offset
+        local offsetOpt = Options.AutoShootOffset
+        local offset = (offsetOpt and typeof(offsetOpt.Value) == "number") and offsetOpt.Value or 0.05
+        local rate = getWeaponFireRate(tool) + offset
 
-    -- Slot 0 = equipped weapon slot (matches the game client and the
-    -- RemoteSpy log). Do NOT use slot 1 — ricochet chains get rejected.
-    local slot = 0
-    local now = tick()
-    if now - lastShootTimePerSlot[slot] < rate then return end
+        local slot = 0
+        local now = tick()
+        if now - lastShootTimePerSlot[slot] < rate then return end
 
-    S.remoteArsenalShotCounter = S.remoteArsenalShotCounter + 1
-    local counter = S.remoteArsenalShotCounter
+        S.remoteArsenalShotCounter = S.remoteArsenalShotCounter + 1
+        local counter = S.remoteArsenalShotCounter
 
-    if S.debugRicochet then
-        local hops = hitTable[1] and hitTable[1].HitData and #hitTable[1].HitData or 0
-        print(string.format("[Ricochet] fireNormalWeapon slot=%d counter=%d hops=%d ricochet=%s",
-            slot, counter, hops, tostring(hops > 1)))
-    end
+        if S.debugRicochet then
+            local hops = hitTable[1] and hitTable[1].HitData and #hitTable[1].HitData or 0
+            print(string.format("[Ricochet] fireNormalWeapon slot=%d counter=%d hops=%d ricochet=%s",
+                slot, counter, hops, tostring(hops > 1)))
+        end
 
-    local ok = fireShootRemote(shootRemote, originPos, hitTable, slot, counter)
-    if ok then
-        lastShootTimePerSlot[slot] = now
-        if currentAmmo then
-            tool:SetAttribute("Ammo", math.max(0, currentAmmo - 1))
+        local ok = fireShootRemote(shootRemote, originPos, hitTable, slot, counter)
+        if ok then
+            lastShootTimePerSlot[slot] = now
+            if currentAmmo then
+                tool:SetAttribute("Ammo", math.max(0, currentAmmo - 1))
+            end
         end
     end
-end
 
-    -- ============================================================
-    -- START / STOP
-    -- ============================================================
     function S.stopAutoShoot()
         if S.autoShootConn then S.autoShootConn:Disconnect(); S.autoShootConn = nil end
         stopRaThreads()
@@ -2455,11 +2401,10 @@ end
                 return
             end
 
-                        if isRemoteArsenal(tool) then
+            if isRemoteArsenal(tool) then
                 if S.raActiveArsenal ~= tool then
                     startRaThreads(tool)
                 else
-                    -- Respawn any slot whose thread died, without killing the rest
                     local slots = getRemoteArsenalSlots(tool)
                     if slots then
                         for _, slotData in ipairs(slots) do
@@ -2481,7 +2426,6 @@ end
         end)
     end
 end
-            
 
 -- ============================================
 -- AUTO PICKUP
@@ -2599,7 +2543,6 @@ do
     end
 end
 
-
 -- ============================================
 -- BRING PICKUP ITEM
 -- ============================================
@@ -2704,14 +2647,13 @@ do
 end
 
 -- ============================================
--- MINIMAP RADAR (category-based, no mobs/players)
+-- MINIMAP RADAR
 -- ============================================
 do
     local radarConn  = nil
     local drawings   = nil
     local MAX_DOTS   = 400
 
-    -- Categories shown on radar, with the ESP keys they map to.
     local CATEGORY_KEYS = {
         "Gun", "Melee", "Medical", "Armor", "Food",
         "Resource", "Carpart", "Fuel", "Ammunition", "Ability",
@@ -2785,7 +2727,6 @@ do
         for _, d in ipairs(drawings.dots) do d.Visible = false end
     end
 
-    -- Build a "which category is enabled" lookup on demand
     local function getEnabledCategories()
         local enabled = {}
         for _, key in ipairs(CATEGORY_KEYS) do
@@ -2799,7 +2740,6 @@ do
         local out = {}
         local r2 = range * range
 
-        -- Items (all enabled categories scanned in one pass)
         local enabled = getEnabledCategories()
         local anyEnabled = next(enabled) ~= nil
         if anyEnabled and S.droppedItemsFolder then
@@ -2822,7 +2762,6 @@ do
             end
         end
 
-        -- Chests
         if Toggles.RadarChests and Toggles.RadarChests.Value then
             local map = Workspace:FindFirstChild("Map")
             local crates = map and map:FindFirstChild("Crates")
@@ -2852,7 +2791,6 @@ do
             end
         end
 
-        -- Structures
         if Toggles.RadarStructures and Toggles.RadarStructures.Value and S.structuresFolder then
             for _, s in ipairs(S.structuresFolder:GetChildren()) do
                 if s:IsA("Model") then
@@ -3314,6 +3252,14 @@ do
     playerESPGroup:AddToggle("PlayerShowNames", { Text = "Show Names", Default = false, Callback = function(s) S.playerESPVars.Name = s; S.refreshPlayerESP() end })
     playerESPGroup:AddToggle("PlayerShowDistance", { Text = "Show Distance", Default = false, Callback = function(s) S.playerESPVars.Distance = s; S.refreshPlayerESP() end })
 
+    -- Chest ESP moved to Left
+    local chestESPGroup = Tabs.Visuals:AddLeftGroupbox("Chest ESP", "gift")
+    chestESPGroup:AddToggle("ChestESP", { Text = "Chest ESP", Default = false, Callback = function(st) if st then S.startChestESP() else S.stopChestESP() end end })
+    chestESPGroup:AddToggle("ChestChams", { Text = "Chams", Default = false, Callback = function(st) S.chestESPVars.Chams = st; S.refreshChestESP() end })
+    chestESPGroup:AddDivider()
+    chestESPGroup:AddToggle("ChestShowNames", { Text = "Show Names", Default = false, Callback = function(st) S.chestESPVars.Name = st; S.refreshChestESP() end })
+    chestESPGroup:AddToggle("ChestShowDistance", { Text = "Show Distance", Default = false, Callback = function(st) S.chestESPVars.Distance = st; S.refreshChestESP() end })
+
     local itemESPGroup = Tabs.Visuals:AddRightGroupbox("Item ESP", "package")
     itemESPGroup:AddToggle("ItemShowNames", { Text = "Show Names (All Items)", Default = false, Callback = function(s) for _, sys in pairs(S.espSystems) do sys.vars.Name = s; sys.refresh() end end })
     itemESPGroup:AddToggle("ItemShowDistance", { Text = "Show Distance (All Items)", Default = false, Callback = function(s) for _, sys in pairs(S.espSystems) do sys.vars.Distance = s; sys.refresh() end end })
@@ -3356,13 +3302,6 @@ do
     itemESPGroup:AddDivider()
     itemESPGroup:AddToggle("StructureShowNames", { Text = "Show Names", Default = false, Callback = function(s) S.structureESPVars.Name = s; S.refreshStructureESP() end })
     itemESPGroup:AddToggle("StructureShowDistance", { Text = "Show Distance", Default = false, Callback = function(s) S.structureESPVars.Distance = s; S.refreshStructureESP() end })
-
-    local chestESPGroup = Tabs.Visuals:AddRightGroupbox("Chest ESP", "gift")
-    chestESPGroup:AddToggle("ChestESP", { Text = "Chest ESP", Default = false, Callback = function(st) if st then S.startChestESP() else S.stopChestESP() end end })
-    chestESPGroup:AddToggle("ChestChams", { Text = "Chams", Default = false, Callback = function(st) S.chestESPVars.Chams = st; S.refreshChestESP() end })
-    chestESPGroup:AddDivider()
-    chestESPGroup:AddToggle("ChestShowNames", { Text = "Show Names", Default = false, Callback = function(st) S.chestESPVars.Name = st; S.refreshChestESP() end })
-    chestESPGroup:AddToggle("ChestShowDistance", { Text = "Show Distance", Default = false, Callback = function(st) S.chestESPVars.Distance = st; S.refreshChestESP() end })
 end
 
 -- ============================================
@@ -3403,76 +3342,125 @@ end
 -- UI: COMBAT TAB
 -- ============================================
 do
-    local killAuraGroup = Tabs.Combat:AddLeftGroupbox("Kill Aura", "target")
-    killAuraGroup:AddToggle("KillAura", {
+    -- =========================================================
+    -- LEFT COLUMN
+    -- =========================================================
+
+    -- ---------- KILL AURA ----------
+    local killAuraBox = Tabs.Combat:AddLeftGroupbox("Kill Aura", "target")
+    killAuraBox:AddToggle("KillAura", {
         Text = "Kill Aura", Default = false,
         Callback = function(st) if st then S.startKillAura() else S.stopKillAura() end end,
     })
-    killAuraGroup:AddDropdown("KillAuraPriority", { Values = {"Nearest","Lowest HP","Highest HP"}, Default = 1, Text = "Target Priority" })
-    killAuraGroup:AddToggle("KillAuraAutoEquip", { Text = "Auto-Equip Weapon", Default = false })
-    killAuraGroup:AddToggle("KillAuraShowIndicator", { Text = "Show Target Indicator", Default = true })
-    killAuraGroup:AddToggle("KillAuraExtendedRange", { Text = "Extended Range (+2)", Default = true })
-    killAuraGroup:AddSlider("KillAuraRange", { Text = "Base Range", Default = 6, Min = 1, Max = 20, Rounding = 0, Suffix = " studs" })
-    killAuraGroup:AddSlider("KillAuraSwingRate", { Text = "Swing Delay", Default = 0.5, Min = 0.1, Max = 1.0, Rounding = 2, Suffix = " s" })
 
-    local aimbotGroup = Tabs.Combat:AddRightGroupbox("Aimbot", "crosshair")
-    aimbotGroup:AddToggle("Aimbot", {
+    local killAuraTabs = killAuraBox:AddTabbox()
+    local killAuraTargetTab = killAuraTabs:AddTab("Targeting", "crosshair")
+    killAuraTargetTab:AddDropdown("KillAuraPriority", {
+        Values = {"Nearest","Lowest HP","Highest HP"}, Default = 1, Text = "Target Priority",
+    })
+    killAuraTargetTab:AddSlider("KillAuraRange", {
+        Text = "Base Range", Default = 6, Min = 1, Max = 20, Rounding = 0, Suffix = " studs",
+    })
+    killAuraTargetTab:AddToggle("KillAuraExtendedRange", { Text = "Extended Range (+2)", Default = true })
+
+    local killAuraBehaviourTab = killAuraTabs:AddTab("Behaviour", "settings")
+    killAuraBehaviourTab:AddToggle("KillAuraAutoEquip",     { Text = "Auto-Equip Weapon",     Default = false })
+    killAuraBehaviourTab:AddToggle("KillAuraShowIndicator", { Text = "Show Target Indicator", Default = true  })
+    killAuraBehaviourTab:AddSlider("KillAuraSwingRate", {
+        Text = "Swing Delay", Default = 0.5, Min = 0.1, Max = 1.0, Rounding = 2, Suffix = " s",
+    })
+
+    -- ---------- AUTO SHOOT ----------
+    local autoShootBox = Tabs.Combat:AddLeftGroupbox("Auto Shoot", "crosshair")
+    autoShootBox:AddToggle("AutoShoot", {
+        Text = "Auto Shoot", Default = false,
+        Callback = function(st) if st then S.startAutoShoot() else S.stopAutoShoot() end end,
+    })
+
+    local autoShootTabs = autoShootBox:AddTabbox()
+    local asTargetTab = autoShootTabs:AddTab("Targeting", "target")
+    asTargetTab:AddDropdown("AutoShootPart", {
+        Text = "Aim Part", Default = "Head",
+        Values = {"Head","HumanoidRootPart","Torso","UpperTorso"},
+    })
+    asTargetTab:AddSlider("AutoShootRange", {
+        Text = "Range", Default = 300, Min = 50, Max = 500, Rounding = 0, Suffix = " studs",
+    })
+    asTargetTab:AddDropdown("AutoShootPriority", {
+        Text = "Target Priority", Default = "Nearest",
+        Values = { "Nearest", "Farthest", "Lowest HP", "Highest HP" },
+    })
+    asTargetTab:AddDropdown("AutoShootTarget", {
+        Text = "Target Mode", Default = "Mobs", Values = {"Mobs","Players","Both"},
+    })
+
+    local asFireTab = autoShootTabs:AddTab("Fire Rate", "zap")
+    asFireTab:AddSlider("AutoShootOffset", {
+        Text = "Fire Rate Offset", Default = 0.05, Min = 0.01, Max = 0.2, Rounding = 3, Suffix = " s",
+    })
+    asFireTab:AddLabel("Remote Arsenal: fires each slot at its own rate.", { DoesWrap = true })
+
+    -- ---------- AUTO RELOAD ----------
+    local autoReloadBox = Tabs.Combat:AddLeftGroupbox("Auto Reload", "refresh-cw")
+    autoReloadBox:AddToggle("AutoReload", {
+        Text = "Auto Reload", Default = false,
+        Callback = function(st) if st then S.startAutoReload() else S.stopAutoReload() end end,
+    })
+    autoReloadBox:AddLabel("Handles Remote Arsenal per-slot.", { DoesWrap = true })
+
+
+    -- =========================================================
+    -- RIGHT COLUMN
+    -- =========================================================
+
+    -- ---------- AIMBOT ----------
+    local aimbotBox = Tabs.Combat:AddRightGroupbox("Aimbot", "crosshair")
+    aimbotBox:AddToggle("Aimbot", {
         Text = "Aimbot", Default = false,
         Callback = function(st) if st then S.startAimbot() else S.stopAimbot() end end,
     })
-    aimbotGroup:AddDropdown("AimbotTarget", { Text = "Target Mode", Default = "Mobs", Values = {"Mobs","Players","Both"} })
-    aimbotGroup:AddDropdown("AimbotPart", { Text = "Aim Part", Default = "Head", Values = {"Head","HumanoidRootPart","Torso","UpperTorso"} })
-    aimbotGroup:AddDropdown("AimbotPriority", { Text = "Target Priority", Default = "Distance", Values = {"Distance","FOV"} })
-    aimbotGroup:AddSlider("AimbotRange", { Text = "Max Range", Default = 200, Min = 50, Max = 1000, Rounding = 0 })
-    aimbotGroup:AddSlider("AimbotFOV", { Text = "FOV Radius", Default = 100, Min = 10, Max = 500, Rounding = 0 })
-    aimbotGroup:AddSlider("AimbotSmoothness", { Text = "Smoothness", Default = 0.3, Min = 0, Max = 1, Rounding = 2 })
-    aimbotGroup:AddToggle("AimbotPrediction", { Text = "Velocity Prediction", Default = false })
-    aimbotGroup:AddSlider("AimbotPredictionAmount", { Text = "Prediction Amount", Default = 0.15, Min = 0.05, Max = 0.5, Rounding = 2 })
-    aimbotGroup:AddDivider()
-    aimbotGroup:AddToggle("AimbotFOVCircle", { Text = "FOV Circle", Default = false })
 
-    aimbotGroup:AddDivider()
-    aimbotGroup:AddToggle("SilentAim", {
+    local aimbotTabs = aimbotBox:AddTabbox()
+    local abTargetTab = aimbotTabs:AddTab("Targeting", "target")
+    abTargetTab:AddDropdown("AimbotTarget",   { Text = "Target Mode",     Default = "Mobs",     Values = {"Mobs","Players","Both"} })
+    abTargetTab:AddDropdown("AimbotPart",     { Text = "Aim Part",        Default = "Head",     Values = {"Head","HumanoidRootPart","Torso","UpperTorso"} })
+    abTargetTab:AddDropdown("AimbotPriority", { Text = "Target Priority", Default = "Distance", Values = {"Distance","FOV"} })
+    abTargetTab:AddSlider("AimbotRange",      { Text = "Max Range",   Default = 200, Min = 50, Max = 1000, Rounding = 0 })
+    abTargetTab:AddSlider("AimbotFOV",        { Text = "FOV Radius",  Default = 100, Min = 10, Max = 500,  Rounding = 0 })
+
+    local abSmoothingTab = aimbotTabs:AddTab("Smoothing", "sliders-horizontal")
+    abSmoothingTab:AddSlider("AimbotSmoothness", { Text = "Smoothness", Default = 0.3, Min = 0, Max = 1, Rounding = 2 })
+    abSmoothingTab:AddToggle("AimbotPrediction", { Text = "Velocity Prediction", Default = false })
+    abSmoothingTab:AddSlider("AimbotPredictionAmount", { Text = "Prediction Amount", Default = 0.15, Min = 0.05, Max = 0.5, Rounding = 2 })
+    abSmoothingTab:AddDivider()
+    abSmoothingTab:AddToggle("AimbotFOVCircle", { Text = "FOV Circle", Default = false })
+
+    -- ---------- SILENT AIM ----------
+    local silentAimBox = Tabs.Combat:AddRightGroupbox("Silent Aim", "crosshair")
+    silentAimBox:AddToggle("SilentAim", {
         Text = "Silent Aim",
         Default = false,
         Tooltip = "Hooks BulletWeapon.fire. Redirects shots client-side without moving the camera.",
         Callback = function(st) if st then S.startSilentAim() else S.stopSilentAim() end end,
     })
-    aimbotGroup:AddDropdown("SilentAimTarget", { Text = "Silent Target", Default = "Mobs", Values = {"Mobs","Players","Both"} })
-    aimbotGroup:AddDropdown("SilentAimPart",   { Text = "Silent Aim Part", Default = "Head", Values = {"Head","HumanoidRootPart","Torso","UpperTorso"} })
-    aimbotGroup:AddDropdown("SilentAimPriority", { Text = "Silent Priority", Default = "Nearest", Values = {"Nearest","Farthest","Lowest HP","Highest HP","FOV"} })
-    aimbotGroup:AddSlider("SilentAimRange", { Text = "Silent Range", Default = 300, Min = 50, Max = 1000, Rounding = 0 })
-    aimbotGroup:AddSlider("SilentAimFOV",   { Text = "Silent FOV",   Default = 150, Min = 10, Max = 500,  Rounding = 0 })
-    aimbotGroup:AddToggle("SilentAimPrediction", { Text = "Silent Prediction", Default = true })
-    aimbotGroup:AddSlider("SilentAimPredictionAmount", { Text = "Silent Predict Amount", Default = 0.12, Min = 0.0, Max = 0.5, Rounding = 2 })end
+
+    local silentAimTabs = silentAimBox:AddTabbox()
+    local saTargetTab = silentAimTabs:AddTab("Targeting", "target")
+    saTargetTab:AddDropdown("SilentAimTarget",   { Text = "Silent Target",   Default = "Mobs",    Values = {"Mobs","Players","Both"} })
+    saTargetTab:AddDropdown("SilentAimPart",     { Text = "Silent Aim Part", Default = "Head",    Values = {"Head","HumanoidRootPart","Torso","UpperTorso"} })
+    saTargetTab:AddDropdown("SilentAimPriority", { Text = "Silent Priority", Default = "Nearest", Values = {"Nearest","Farthest","Lowest HP","Highest HP","FOV"} })
+    saTargetTab:AddSlider("SilentAimRange",      { Text = "Silent Range", Default = 300, Min = 50, Max = 1000, Rounding = 0 })
+    saTargetTab:AddSlider("SilentAimFOV",        { Text = "Silent FOV",   Default = 150, Min = 10, Max = 500,  Rounding = 0 })
+
+    local saPredictionTab = silentAimTabs:AddTab("Prediction", "trending-up")
+    saPredictionTab:AddToggle("SilentAimPrediction", { Text = "Silent Prediction", Default = true })
+    saPredictionTab:AddSlider("SilentAimPredictionAmount", { Text = "Silent Predict Amount", Default = 0.12, Min = 0.0, Max = 0.5, Rounding = 2 })
+end
 
 -- ============================================
 -- UI: EXPLOITS TAB
 -- ============================================
 do
-    local autoShootGroup = Tabs.Exploits:AddLeftGroupbox("Auto Shoot", "crosshair")
-    autoShootGroup:AddToggle("AutoShoot", {
-        Text = "Auto Shoot", Default = false,
-        Callback = function(st) if st then S.startAutoShoot() else S.stopAutoShoot() end end,
-    })
-    autoShootGroup:AddSlider("AutoShootOffset", { Text = "Fire Rate Offset", Default = 0.05, Min = 0.01, Max = 0.2, Rounding = 3, Suffix = " s" })
-    autoShootGroup:AddDropdown("AutoShootPart", { Text = "Aim Part", Default = "Head", Values = {"Head","HumanoidRootPart","Torso","UpperTorso"} })
-    autoShootGroup:AddSlider("AutoShootRange", { Text = "Range", Default = 300, Min = 50, Max = 500, Rounding = 0, Suffix = " studs" })
-    autoShootGroup:AddDropdown("AutoShootPriority", {
-    Text = "Target Priority",
-    Default = "Nearest",
-    Values = { "Nearest", "Farthest", "Lowest HP", "Highest HP" },
-})
-    autoShootGroup:AddDropdown("AutoShootTarget", { Text = "Target Mode", Default = "Mobs", Values = {"Mobs","Players","Both"} })
-    autoShootGroup:AddLabel("Remote Arsenal: fires each slot at its own rate.", { DoesWrap = true })
-
-    local autoReloadGroup = Tabs.Exploits:AddRightGroupbox("Auto Reload", "refresh-cw")
-    autoReloadGroup:AddToggle("AutoReload", {
-        Text = "Auto Reload", Default = false,
-        Callback = function(st) if st then S.startAutoReload() else S.stopAutoReload() end end,
-    })
-    autoReloadGroup:AddLabel("Handles Remote Arsenal per-slot.", { DoesWrap = true })
-
     local repairAuraGroup = Tabs.Exploits:AddRightGroupbox("Repair Aura", "wrench")
     repairAuraGroup:AddToggle("RepairAura", {
         Text = "Repair Aura", Default = false,
@@ -3509,7 +3497,7 @@ do
         Multi = true, Text = "Blacklist", Searchable = true,
     })
 
-        local categoryFilters = Tabs.AutoPickup:AddRightGroupbox("Category Filters", "filter")
+    local categoryFilters = Tabs.AutoPickup:AddRightGroupbox("Category Filters", "filter")
     categoryFilters:AddToggle("UseCategoryFilter", { Text = "Use Category Filters", Default = false })
     categoryFilters:AddDivider()
     categoryFilters:AddToggle("PickupAmmo", { Text = "Ammo", Default = false })
@@ -3532,17 +3520,7 @@ do
         Tooltip = "Grenade, Molotov.",
     })
 
-    categoryFilters:AddToggle("PickupConsumables", {
-        Text = "Consumables",
-        Default = false,
-        Tooltip = "Grenade, Molotov.",
-    })
-
-    -- ============================================
-    -- BRING PICKUP ITEM (right side, below Category Filters)
-    -- ============================================
     local bringPickupGroup = Tabs.AutoPickup:AddRightGroupbox("Bring Pickup Item", "download")
-
     bringPickupGroup:AddToggle("BringPickupItem", {
         Text = "Bring Pickup Item",
         Default = false,
@@ -3551,20 +3529,17 @@ do
             if st then S.startBringPickup() else S.stopBringPickup() end
         end,
     })
-
     bringPickupGroup:AddToggle("BringAllPickup", {
         Text = "All Pickup Items",
         Default = false,
         Tooltip = "Pick up all dropped items without filtering.",
     })
-
     bringPickupGroup:AddDropdown("BringPickupSortOrder", {
         Values = {"Nearest First", "Farthest First", "Alphabetical", "Reverse Alphabetical"},
         Default = 1,
         Text = "Sort Order",
         Tooltip = "Sets which items are picked up first.",
     })
-
     bringPickupGroup:AddLabel("Item Filter (when 'All Pickup Items' is off)", { DoesWrap = true })
     bringPickupGroup:AddDropdown("BringPickupWhitelist", {
         Values = S.pickupItemNames,
@@ -3662,8 +3637,8 @@ Library:OnUnload(function()
         if typeof(conn) == "RBXScriptConnection" then pcall(function() conn:Disconnect() end) end
     end
     S.connections = {}
-        S.stopAutoPickup(); S.stopBringPickup(); S.stopRepairAura(); S.stopAutoSprint(); S.stopKillAura()
-        S.stopAimbot(); S.stopSilentAim(); S.stopBhop(); S.stopFunnyDance(); S.stopRemoteSpy()
+    S.stopAutoPickup(); S.stopBringPickup(); S.stopRepairAura(); S.stopAutoSprint(); S.stopKillAura()
+    S.stopAimbot(); S.stopSilentAim(); S.stopBhop(); S.stopFunnyDance(); S.stopRemoteSpy()
     S.stopAutoShoot(); S.stopAutoReload(); S.stopObjectIdentifier(); S.stopChestESP(); S.stopRadar()
     pcall(function() if setfpscap then setfpscap(60) end end)
     if S.fovCircle then pcall(function() S.fovCircle:Remove() end); S.fovCircle = nil end
@@ -3677,17 +3652,13 @@ end)
 -- KEYBINDS TAB
 -- ============================================
 do
-        local MenuGroup = Tabs.Keybinds:AddLeftGroupbox("Keybinds", "key")
+    local MenuGroup = Tabs.Keybinds:AddLeftGroupbox("Keybinds", "key")
     local Toggle = MenuGroup:AddToggle("MyToggle", { Text = "Example Toggle", Default = false })
     Toggle:AddKeyPicker("KeyPicker", {
         Default = "K", Mode = "Toggle", Text = "Example keybind", NoUI = false,
     })
 
-    -- ============================================
-    -- MINIMAP RADAR (keybinds tab)
-    -- ============================================
     local radarGroup = Tabs.Keybinds:AddLeftGroupbox("Minimap Radar", "map")
-
     radarGroup:AddToggle("Radar", {
         Text = "Enable Radar", Default = false,
         Callback = function(st) if st then S.startRadar() else S.stopRadar() end end,
@@ -3706,8 +3677,6 @@ do
 
     radarGroup:AddDivider()
     radarGroup:AddLabel("Item Categories", { DoesWrap = true })
-
-    -- Toggle key names must match CATEGORY_KEYS inside the radar block.
     radarGroup:AddToggle("RadarGun",        { Text = "Gun",        Default = true })
     radarGroup:AddToggle("RadarMelee",      { Text = "Melee",      Default = false })
     radarGroup:AddToggle("RadarMedical",    { Text = "Medical",    Default = true })
@@ -3722,7 +3691,7 @@ do
     radarGroup:AddDivider()
     radarGroup:AddLabel("World Objects", { DoesWrap = true })
     radarGroup:AddToggle("RadarChests",     { Text = "Chests",     Default = true })
-    radarGroup:AddToggle("RadarStructures", { Text = "Structures", Default = false }
+    radarGroup:AddToggle("RadarStructures", { Text = "Structures", Default = false })
 end
 
 -- ============================================
