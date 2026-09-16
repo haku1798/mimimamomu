@@ -3677,7 +3677,7 @@ end)
 -- KEYBINDS TAB
 -- ============================================
 do
-    local MenuGroup = Tabs.Keybinds:AddLeftGroupbox("Keybinds", "key")
+        local MenuGroup = Tabs.Keybinds:AddLeftGroupbox("Keybinds", "key")
     local Toggle = MenuGroup:AddToggle("MyToggle", { Text = "Example Toggle", Default = false })
     Toggle:AddKeyPicker("KeyPicker", {
         Default = "K", Mode = "Toggle", Text = "Example keybind", NoUI = false,
@@ -3707,24 +3707,22 @@ do
     radarGroup:AddDivider()
     radarGroup:AddLabel("Item Categories", { DoesWrap = true })
 
-            radarcategory = Tabs.Keybinds:AddRightGroupbox("Minimap Radar", "map")
-
     -- Toggle key names must match CATEGORY_KEYS inside the radar block.
-    radarcategory:AddToggle("RadarGun",        { Text = "Gun",        Default = true })
-    radarcategory:AddToggle("RadarMelee",      { Text = "Melee",      Default = false })
-    radarcategory:AddToggle("RadarMedical",    { Text = "Medical",    Default = true })
-    radarcategory:AddToggle("RadarArmor",      { Text = "Armor",      Default = false })
-    radarcategory:AddToggle("RadarFood",       { Text = "Food",       Default = false })
-    radarcategory:AddToggle("RadarResource",   { Text = "Resources",  Default = false })
-    radarcategory:AddToggle("RadarCarpart",    { Text = "Car Parts",  Default = false })
-    radarcategory:AddToggle("RadarFuel",       { Text = "Fuel",       Default = false })
-    radarcategory:AddToggle("RadarAmmunition", { Text = "Ammunition", Default = true })
-    radarcategory:AddToggle("RadarAbility",    { Text = "Abilities",  Default = false })
+    radarGroup:AddToggle("RadarGun",        { Text = "Gun",        Default = true })
+    radarGroup:AddToggle("RadarMelee",      { Text = "Melee",      Default = false })
+    radarGroup:AddToggle("RadarMedical",    { Text = "Medical",    Default = true })
+    radarGroup:AddToggle("RadarArmor",      { Text = "Armor",      Default = false })
+    radarGroup:AddToggle("RadarFood",       { Text = "Food",       Default = false })
+    radarGroup:AddToggle("RadarResource",   { Text = "Resources",  Default = false })
+    radarGroup:AddToggle("RadarCarpart",    { Text = "Car Parts",  Default = false })
+    radarGroup:AddToggle("RadarFuel",       { Text = "Fuel",       Default = false })
+    radarGroup:AddToggle("RadarAmmunition", { Text = "Ammunition", Default = true })
+    radarGroup:AddToggle("RadarAbility",    { Text = "Abilities",  Default = false })
 
-    radarcategory:AddDivider()
-    radarcategory:AddLabel("World Objects", { DoesWrap = true })
-    radarcategory:AddToggle("RadarChests",     { Text = "Chests",     Default = true })
-    radarcategory:AddToggle("RadarStructures", { Text = "Structures", Default = false })
+    radarGroup:AddDivider()
+    radarGroup:AddLabel("World Objects", { DoesWrap = true })
+    radarGroup:AddToggle("RadarChests",     { Text = "Chests",     Default = true })
+    radarGroup:AddToggle("RadarStructures", { Text = "Structures", Default = false }
 end
 
 -- ============================================
