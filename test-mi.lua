@@ -1618,7 +1618,7 @@ do
         if mode == "Mobs" or mode == "Both" then
             if S.charactersFolder then
                 for _, mob in ipairs(S.charactersFolder:GetChildren()) do
-                    if table.find(S.mobNames, mob.Name) then check(mob) end
+                    if mobNameSet[mob.Name] then check(mob) end
                 end
             end
         end
@@ -1888,14 +1888,26 @@ do
     local losParams = RaycastParams.new()
     losParams.FilterType = Enum.RaycastFilterType.Exclude
     losParams.IgnoreWater  = true
+    local losFilter = { nil, nil }  -- reused, no per-call allocation
 
     local function hasLineOfSight(fromPos, toPart, targetChar, myChar)
-        losParams.FilterDescendantsInstances = { myChar, targetChar }
+        losFilter[1] = myChar
+        losFilter[2] = targetChar
+        losParams.FilterDescendantsInstances = losFilter
         local result = Workspace:Raycast(fromPos, toPart.Position - fromPos, losParams)
         return result == nil
     end
 
-    local function getTargetForAutoShoot()
+    -- O(1) mob name lookup (replaces table.find which is O(42))
+    local mobNameSet = {}
+    for _, n in ipairs(S.mobNames) do mobNameSet[n] = true end
+
+    -- Target cache: recompute at most ~12x per second.
+    -- 80ms is fast enough for any fire rate, but ~5x fewer raycasts than every frame.
+    local TARGET_TTL = 0.08
+    local targetCache = { result = nil, time = -math.huge }
+
+    local function computeTargetForAutoShoot()
         local char = S.getLocalCharacter(); if not char then return nil end
         local myRoot = char:FindFirstChild("HumanoidRootPart"); if not myRoot then return nil end
         local range = Options.AutoShootRange and Options.AutoShootRange.Value or 300
@@ -1929,7 +1941,7 @@ do
         if mode == "Mobs" or mode == "Both" then
             if S.charactersFolder then
                 for _, mob in ipairs(S.charactersFolder:GetChildren()) do
-                    if table.find(S.mobNames, mob.Name) then check(mob) end
+                    if mobNameSet[mob.Name] then check(mob) end
                 end
             end
         end
@@ -1954,7 +1966,17 @@ do
             table.sort(candidates, function(a, b) return a.health > b.health end)
         end
 
-        return candidates[1]
+       return candidates[1]
+    end
+
+    local function getTargetForAutoShoot()
+        local now = tick()
+        if now - targetCache.time < TARGET_TTL then
+            return targetCache.result
+        end
+        targetCache.time   = now
+        targetCache.result = computeTargetForAutoShoot()
+        return targetCache.result
     end
 
     local MAX_RICOCHET_HOPS = 10
@@ -2236,12 +2258,23 @@ do
                 if not arsenal or not arsenal.Parent then break end
             end
 
-            local ok, err = pcall(function()
+                        local ok, err = pcall(function()
                 if S.raSlotReloading[slot] then task.wait(0.05); return end
 
                 local slotData = getRemoteArsenalSlot(slot, arsenal)
                 if not slotData then task.wait(0.1); return end
 
+                -- 1. Rate gate FIRST
+                local rate = getRemoteArsenalSlotFireRate(slotData, arsenal) or 0.15
+                local offset = (offsetOpt and typeof(offsetOpt.Value) == "number") and offsetOpt.Value or 0.05
+                local interval = rate + offset
+                local now = tick()
+                if now - lastShootTimePerSlot[slot] < interval then
+                    task.wait(interval)
+                    return
+                end
+
+                -- 2. Ammo gate
                 local ammo = getRemoteArsenalAmmo(slotData)
                 if ammo ~= nil and ammo <= 0 then
                     if Toggles.AutoReload and Toggles.AutoReload.Value then
@@ -2251,6 +2284,7 @@ do
                     return
                 end
 
+                -- 3. Only now do the expensive work
                 local target = getTargetForAutoShoot()
                 if not target or not target.part or not target.part.Parent then
                     task.wait(0.05); return
@@ -2263,20 +2297,13 @@ do
                 local shootRemote = arsenal:FindFirstChild("Shoot")
                 if not shootRemote then task.wait(0.1); return end
 
-                local rate = getRemoteArsenalSlotFireRate(slotData, arsenal) or 0.15
-                local offset = (offsetOpt and typeof(offsetOpt.Value) == "number") and offsetOpt.Value or 0.05
-                local interval = rate + offset
-
-                local now = tick()
-                if now - lastShootTimePerSlot[slot] >= interval then
-                    S.remoteArsenalShotCounter = S.remoteArsenalShotCounter + 1
-                    local counter = S.remoteArsenalShotCounter
-                    local fired = fireShootRemote(shootRemote, originPos, hitTable, slot, counter)
-                    if fired then
-                        lastShootTimePerSlot[slot] = now
-                        if ammo ~= nil then
-                            setRemoteArsenalAmmo(slotData, math.max(0, ammo - 1))
-                        end
+                S.remoteArsenalShotCounter = S.remoteArsenalShotCounter + 1
+                local counter = S.remoteArsenalShotCounter
+                local fired = fireShootRemote(shootRemote, originPos, hitTable, slot, counter)
+                if fired then
+                    lastShootTimePerSlot[slot] = now
+                    if ammo ~= nil then
+                        setRemoteArsenalAmmo(slotData, math.max(0, ammo - 1))
                     end
                 end
                 task.wait(interval)
@@ -2305,23 +2332,25 @@ do
     S.startRaThreads = startRaThreads
 
     local function fireNormalWeapon(tool, shootRemote)
+        -- 1. Rate gate FIRST — cheap tick() comparison
+        local offsetOpt = Options.AutoShootOffset
+        local offset = (offsetOpt and typeof(offsetOpt.Value) == "number") and offsetOpt.Value or 0.05
+        local rate = getWeaponFireRate(tool) + offset
+        local slot = 0
+        local now = tick()
+        if now - lastShootTimePerSlot[slot] < rate then return end
+
+        -- 2. Ammo gate — cheap attribute read
         local currentAmmo = tool:GetAttribute("Ammo") or getAmmoValue(tool)
         if currentAmmo and currentAmmo <= 0 then return end
 
+        -- 3. Only now do the expensive target lookup + payload build
         local target = getTargetForAutoShoot()
         if not target then return end
 
         local pelletCount = getPelletsForNormal(tool)
         local originPos, hitTable = buildShotPayload(target, pelletCount)
         if not originPos then return end
-
-        local offsetOpt = Options.AutoShootOffset
-        local offset = (offsetOpt and typeof(offsetOpt.Value) == "number") and offsetOpt.Value or 0.05
-        local rate = getWeaponFireRate(tool) + offset
-
-        local slot = 0
-        local now = tick()
-        if now - lastShootTimePerSlot[slot] < rate then return end
 
         S.remoteArsenalShotCounter = S.remoteArsenalShotCounter + 1
         local counter = S.remoteArsenalShotCounter
@@ -3235,6 +3264,206 @@ function S.startRemoteSpy()
 end
 
 -- ============================================
+-- BUILDING REVEAL
+-- ============================================
+do
+    S.buildingRevealActive = {}
+
+    local BUILDINGS = {
+        { name = "Upgrader",        path = { "Map", "Tiles", "Upgrader" } },
+        { name = "Nuclear Reactor", path = { "Map", "Tiles", "Nuclear Reactor" } },
+        { name = "Military Base",   path = { "Map", "Tiles", "Military Base" } },
+    }
+    S.buildingDefs = BUILDINGS
+
+    local function findBuilding(pathParts)
+        local cur = Workspace
+        for _, p in ipairs(pathParts) do
+            cur = cur and cur:FindFirstChild(p)
+            if not cur then return nil end
+        end
+        return cur
+    end
+
+    local function makeIndicator()
+        local ind = {}
+        ind.line = Drawing.new("Line")
+        ind.line.Thickness = 2
+        ind.line.Color = Color3.fromRGB(0, 255, 200)
+        ind.line.Transparency = 0.9
+        ind.line.Visible = false
+
+        ind.label = Drawing.new("Text")
+        ind.label.Size = 14
+        ind.label.Center = true
+        ind.label.Outline = true
+        ind.label.Color = Color3.fromRGB(0, 255, 200)
+        ind.label.Visible = false
+        return ind
+    end
+
+    local function destroyReveal(name)
+        local data = S.buildingRevealActive[name]
+        if not data then return end
+        if data.highlight then pcall(function() data.highlight:Destroy() end) end
+        if data.billboard then pcall(function() data.billboard:Destroy() end) end
+        if data.conn then pcall(function() data.conn:Disconnect() end) end
+        if data.indicator then
+            pcall(function() data.indicator.line:Remove() end)
+            pcall(function() data.indicator.label:Remove() end)
+        end
+        S.buildingRevealActive[name] = nil
+    end
+
+    function S.revealBuilding(buildingName, duration)
+        duration = duration or 10
+
+        local def
+        for _, b in ipairs(BUILDINGS) do
+            if b.name == buildingName then def = b; break end
+        end
+        if not def then return end
+
+        local building = findBuilding(def.path)
+        if not building then
+            Library:Notify({ Title = "Building Reveal", Description = buildingName .. " not found in Map.Tiles", Time = 3 })
+            return
+        end
+
+        local mainPart = building.PrimaryPart or S.getItemMainPart(building)
+        if not mainPart then
+            Library:Notify({ Title = "Building Reveal", Description = buildingName .. " has no parts", Time = 3 })
+            return
+        end
+
+        -- Clean previous instance of this building
+        destroyReveal(buildingName)
+
+        -- Highlight
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "BuildingReveal_HL"
+        highlight.Adornee = building
+        highlight.FillColor = Color3.fromRGB(0, 255, 200)
+        highlight.FillTransparency = 0.55
+        highlight.OutlineColor = Color3.fromRGB(0, 255, 255)
+        highlight.OutlineTransparency = 0
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Parent = building
+
+        -- Billboard (name + distance)
+        local bb = Instance.new("BillboardGui")
+        bb.Name = "BuildingReveal_BB"
+        bb.Adornee = mainPart
+        bb.Size = UDim2.new(0, 260, 0, 60)
+        bb.StudsOffset = Vector3.new(0, 6, 0)
+        bb.AlwaysOnTop = true
+        bb.Parent = building
+
+        local fr = Instance.new("Frame")
+        fr.Size = UDim2.new(1, 0, 1, 0)
+        fr.BackgroundTransparency = 1
+        fr.Parent = bb
+
+        local nl = Instance.new("TextLabel")
+        nl.Size = UDim2.new(1, 0, 0.55, 0)
+        nl.BackgroundTransparency = 1
+        nl.Text = "🏢 " .. buildingName
+        nl.TextColor3 = Color3.fromRGB(0, 255, 200)
+        nl.TextStrokeTransparency = 0.2
+        nl.TextStrokeColor3 = Color3.new(0, 0, 0)
+        nl.Font = Enum.Font.GothamBold
+        nl.TextSize = 14
+        nl.Parent = fr
+
+        local dl = Instance.new("TextLabel")
+        dl.Size = UDim2.new(1, 0, 0.45, 0)
+        dl.Position = UDim2.new(0, 0, 0.55, 0)
+        dl.BackgroundTransparency = 1
+        dl.Text = "0m"
+        dl.TextColor3 = Color3.fromRGB(200, 255, 240)
+        dl.TextStrokeTransparency = 0.2
+        dl.TextStrokeColor3 = Color3.new(0, 0, 0)
+        dl.Font = Enum.Font.GothamBold
+        dl.TextSize = 12
+        dl.Parent = fr
+
+        -- Direction indicator
+        local indicator = makeIndicator()
+
+        local conn = RunService.RenderStepped:Connect(function()
+            if not building or not building.Parent then return end
+            local char = S.getLocalCharacter()
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local camera = Workspace.CurrentCamera
+            if not hrp or not camera then return end
+
+            local dist = (hrp.Position - mainPart.Position).Magnitude
+            dl.Text = math.floor(dist) .. "m"
+
+            local vp = camera.ViewportSize
+            local sp, onScreen = camera:WorldToViewportPoint(mainPart.Position)
+            local center = Vector2.new(vp.X / 2, vp.Y / 2)
+
+            if onScreen and sp.Z > 0 then
+                -- Short arrow from screen-center toward the building
+                local target = Vector2.new(sp.X, sp.Y)
+                local dir = target - center
+                if dir.Magnitude > 5 then
+                    local n = dir.Unit
+                    local startP = center + n * 80
+                    local endP   = center + n * math.min(200, dir.Magnitude)
+                    indicator.line.From = startP
+                    indicator.line.To   = endP
+                    indicator.line.Visible = true
+
+                    indicator.label.Position = endP + Vector2.new(8, -8)
+                    indicator.label.Text = buildingName .. " [" .. math.floor(dist) .. "m]"
+                    indicator.label.Visible = true
+                else
+                    indicator.line.Visible = false
+                    indicator.label.Visible = false
+                end
+            else
+                -- Off-screen: arrow clamped to viewport edge pointing toward building
+                local dir2D = Vector2.new(sp.X - vp.X / 2, sp.Y - vp.Y / 2)
+                if sp.Z < 0 then dir2D = -dir2D end
+                if dir2D.Magnitude < 0.01 then dir2D = Vector2.new(0, -1) end
+
+                local n = dir2D.Unit
+                local radius = math.min(vp.X, vp.Y) * 0.38
+                local edge   = center + n * radius
+                local tail   = center + n * (radius - 55)
+
+                indicator.line.From = tail
+                indicator.line.To   = edge
+                indicator.line.Visible = true
+
+                indicator.label.Position = edge + n * 18
+                indicator.label.Text = buildingName .. " [" .. math.floor(dist) .. "m]"
+                indicator.label.Visible = true
+            end
+        end)
+
+        S.buildingRevealActive[buildingName] = {
+            building = building,
+            highlight = highlight,
+            billboard = bb,
+            conn = conn,
+            indicator = indicator,
+        }
+
+        Library:Notify({ Title = "Building Reveal", Description = buildingName .. " revealed for " .. duration .. "s", Time = 3 })
+
+        task.delay(duration, function()
+            if S.buildingRevealActive[buildingName] then
+                destroyReveal(buildingName)
+                Library:Notify({ Title = "Building Reveal", Description = buildingName .. " reveal ended", Time = 2 })
+            end
+        end)
+    end
+end
+
+-- ============================================
 -- CHARACTER RESPAWN
 -- ============================================
 LocalPlayer.CharacterRemoving:Connect(function()
@@ -3520,8 +3749,8 @@ do
     pickupSettings:AddDivider()
     pickupSettings:AddLabel("FE Methods", { DoesWrap = true })
     pickupSettings:AddToggle("AutoPickupMethodRemote", { Text = "A – Remote", Default = true })
-    pickupSettings:AddToggle("AutoPickupMethodTouch", { Text = "B – Touch", Default = true })
-    pickupSettings:AddToggle("AutoPickupMethodPrompt", { Text = "C – ProximityPrompt", Default = true })
+    pickupSettings:AddToggle("AutoPickupMethodTouch", { Text = "B – Touch", Default = false })
+    pickupSettings:AddToggle("AutoPickupMethodPrompt", { Text = "C – ProximityPrompt", Default = false })
     pickupSettings:AddDivider()
     pickupSettings:AddDropdown("AutoPickupWhitelist", {
         Values = S.pickupItemNames, Default = 1, Multi = true, Text = "Whitelist", Searchable = true,
@@ -3625,6 +3854,14 @@ do
         Library:Unload()
     end)
 
+        local buildingRevealGroup = Tabs.Misc:AddLeftGroupbox("Building Reveal", "building")
+    for _, def in ipairs(S.buildingDefs) do
+        buildingRevealGroup:AddButton("Reveal " .. def.name, function()
+            S.revealBuilding(def.name, 10)
+        end, { Tooltip = "Highlights the " .. def.name .. " and points an arrow toward it for 10 seconds." })
+    end
+    buildingRevealGroup:AddLabel("Reveals ESP + direction for 10s.", { DoesWrap = true })
+
     local serverGroup = Tabs.Misc:AddRightGroupbox("Server Tools", "server")
     serverGroup:AddButton("Server Hop", function() S.serverHop() end)
     serverGroup:AddButton("Rejoin Server", function() S.rejoinServer() end)
@@ -3680,6 +3917,19 @@ Library:OnUnload(function()
     if Toggles.RemoveFog and Toggles.RemoveFog.Value then S.disableRemoveFog() end
     if Toggles.Fullbright and Toggles.Fullbright.Value then S.disableFullbright() end
     S.stopAntiAFK()
+      for name, _ in pairs(S.buildingRevealActive or {}) do
+        local data = S.buildingRevealActive[name]
+        if data then
+            if data.highlight then pcall(function() data.highlight:Destroy() end) end
+            if data.billboard then pcall(function() data.billboard:Destroy() end) end
+            if data.conn then pcall(function() data.conn:Disconnect() end) end
+            if data.indicator then
+                pcall(function() data.indicator.line:Remove() end)
+                pcall(function() data.indicator.label:Remove() end)
+            end
+        end
+        S.buildingRevealActive[name] = nil
+    end
     Library:Notify({ Title = "test", Description = "Unloaded.", Time = 3 })
 end)
 
