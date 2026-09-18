@@ -3273,7 +3273,7 @@ do
         return ind
     end
 
-    local function destroyReveal(name)
+        local function destroyReveal(name)
         local data = S.buildingRevealActive[name]
         if not data then return end
         if data.highlight then pcall(function() data.highlight:Destroy() end) end
@@ -3283,10 +3283,13 @@ do
             pcall(function() data.indicator.line:Remove() end)
             pcall(function() data.indicator.label:Remove() end)
         end
+        if data.anchor and data.anchor.Parent then
+            pcall(function() data.anchor:Destroy() end)
+        end
         S.buildingRevealActive[name] = nil
     end
 
-    function S.revealBuilding(buildingName, duration)
+        function S.revealBuilding(buildingName, duration)
         duration = duration or 10
 
         local def
@@ -3301,16 +3304,42 @@ do
             return
         end
 
-        local mainPart = building.PrimaryPart or S.getItemMainPart(building)
-        if not mainPart then
-            Library:Notify({ Title = "Building Reveal", Description = buildingName .. " has no parts", Time = 3 })
+        -- ---- Get position from WorldPivot (no BasePart needed) ----
+        local pivotCF
+        if building:IsA("Model") then
+            pivotCF = building:GetPivot()
+        elseif building:IsA("BasePart") then
+            pivotCF = building.CFrame
+        else
+            -- Fallback: any descendant part
+            local anyPart = building:FindFirstChildWhichIsA("BasePart", true)
+            if anyPart then pivotCF = anyPart.CFrame end
+        end
+
+        if not pivotCF then
+            Library:Notify({ Title = "Building Reveal", Description = buildingName .. " has no position", Time = 3 })
             return
         end
 
         -- Clean previous instance of this building
         destroyReveal(buildingName)
 
-        -- Highlight
+        local anchorPos = pivotCF.Position
+
+        -- ---- Invisible anchor part (Workspace-parented) for BillboardGui ----
+        local anchor = Instance.new("Part")
+        anchor.Name = "BuildingReveal_Anchor"
+        anchor.Anchored = true
+        anchor.CanCollide = false
+        anchor.CanQuery = false
+        anchor.CanTouch = false
+        anchor.CastShadow = false
+        anchor.Transparency = 1
+        anchor.Size = Vector3.new(1, 1, 1)
+        anchor.CFrame = CFrame.new(anchorPos + Vector3.new(0, 25, 0))
+        anchor.Parent = Workspace
+
+        -- ---- Highlight (works directly on a Model) ----
         local highlight = Instance.new("Highlight")
         highlight.Name = "BuildingReveal_HL"
         highlight.Adornee = building
@@ -3321,14 +3350,14 @@ do
         highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
         highlight.Parent = building
 
-        -- Billboard (name + distance)
+        -- ---- BillboardGui (name + live distance) ----
         local bb = Instance.new("BillboardGui")
         bb.Name = "BuildingReveal_BB"
-        bb.Adornee = mainPart
+        bb.Adornee = anchor
         bb.Size = UDim2.new(0, 260, 0, 60)
-        bb.StudsOffset = Vector3.new(0, 6, 0)
+        bb.StudsOffset = Vector3.new(0, 0, 0)
         bb.AlwaysOnTop = true
-        bb.Parent = building
+        bb.Parent = anchor
 
         local fr = Instance.new("Frame")
         fr.Size = UDim2.new(1, 0, 1, 0)
@@ -3358,7 +3387,7 @@ do
         dl.TextSize = 12
         dl.Parent = fr
 
-        -- Direction indicator
+        -- ---- Direction indicator ----
         local indicator = makeIndicator()
 
         local conn = RunService.RenderStepped:Connect(function()
@@ -3368,15 +3397,20 @@ do
             local camera = Workspace.CurrentCamera
             if not hrp or not camera then return end
 
-            local dist = (hrp.Position - mainPart.Position).Magnitude
+            -- Keep anchor at the (possibly moving) building pivot
+            pcall(function()
+                local cf = building:GetPivot()
+                anchor.CFrame = CFrame.new(cf.Position + Vector3.new(0, 25, 0))
+            end)
+
+            local dist = (hrp.Position - anchorPos).Magnitude
             dl.Text = math.floor(dist) .. "m"
 
             local vp = camera.ViewportSize
-            local sp, onScreen = camera:WorldToViewportPoint(mainPart.Position)
+            local sp, onScreen = camera:WorldToViewportPoint(anchorPos)
             local center = Vector2.new(vp.X / 2, vp.Y / 2)
 
             if onScreen and sp.Z > 0 then
-                -- Short arrow from screen-center toward the building
                 local target = Vector2.new(sp.X, sp.Y)
                 local dir = target - center
                 if dir.Magnitude > 5 then
@@ -3395,7 +3429,6 @@ do
                     indicator.label.Visible = false
                 end
             else
-                -- Off-screen: arrow clamped to viewport edge pointing toward building
                 local dir2D = Vector2.new(sp.X - vp.X / 2, sp.Y - vp.Y / 2)
                 if sp.Z < 0 then dir2D = -dir2D end
                 if dir2D.Magnitude < 0.01 then dir2D = Vector2.new(0, -1) end
@@ -3416,11 +3449,12 @@ do
         end)
 
         S.buildingRevealActive[buildingName] = {
-            building = building,
+            building  = building,
             highlight = highlight,
             billboard = bb,
-            conn = conn,
+            conn      = conn,
             indicator = indicator,
+            anchor    = anchor,
         }
 
         Library:Notify({ Title = "Building Reveal", Description = buildingName .. " revealed for " .. duration .. "s", Time = 3 })
@@ -3900,6 +3934,9 @@ Library:OnUnload(function()
             end
         end
         S.buildingRevealActive[name] = nil
+                    if data.anchor and data.anchor.Parent then
+                pcall(function() data.anchor:Destroy() end)
+            end
     end
     Library:Notify({ Title = "test", Description = "Unloaded.", Time = 3 })
 end)
@@ -3999,6 +4036,104 @@ SaveManager:LoadAutoloadConfig()
 
 -- Start Anti-AFK by default
 S.startAntiAFK()
+
+-- ============================================
+-- POPUP TEXT LOGGER (always active, no UI)
+-- ============================================
+do
+    local RS = game:GetService("ReplicatedStorage")
+    local PG = game:GetService("Players").LocalPlayer.PlayerGui
+
+    local function log(source, text)
+        text = tostring(text)
+        if text == "" then return end
+        print(("[%s] %s"):format(source, text))
+    end
+
+    local function hookRemote(remote, label)
+        if not remote then return end
+        if remote:IsA("RemoteEvent") then
+            remote.OnClientEvent:Connect(function(...)
+                for i = 1, select("#", ...) do
+                    local v = select(i, ...)
+                    if type(v) == "string" and v ~= "" then
+                        log(label, v)
+                    end
+                end
+            end)
+        elseif remote:IsA("RemoteFunction") then
+            local prev = remote.OnClientInvoke
+            remote.OnClientInvoke = function(...)
+                for i = 1, select("#", ...) do
+                    local v = select(i, ...)
+                    if type(v) == "string" and v ~= "" then
+                        log(label .. "Fn", v)
+                    end
+                end
+                if prev then return prev(...) end
+            end
+        end
+    end
+
+    task.spawn(function()
+        local repl = RS:WaitForChild("Remotes", 30)
+        local rep  = repl and repl:WaitForChild("Replication", 30)
+        if not rep then return end
+        hookRemote(rep:WaitForChild("Popup", 30),    "Popup")
+        hookRemote(rep:WaitForChild("BigPopup", 30), "BigPopup")
+    end)
+
+    local function readText(gui)
+        local out = {}
+        for _, d in ipairs(gui:GetDescendants()) do
+            if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" and d.Visible then
+                table.insert(out, d.Text)
+            end
+        end
+        if #out == 0 and (gui:IsA("TextLabel") or gui:IsA("TextButton")) and gui.Text ~= "" then
+            out[1] = gui.Text
+        end
+        return table.concat(out, " | ")
+    end
+
+    local function watchUI(container, label)
+        if not container then return end
+        local function handle(child)
+            if not child:IsA("GuiObject") then return end
+            local last
+            local function read()
+                local t = readText(child)
+                if t == "" or t == last then return end
+                last = t
+                log(label, t)
+            end
+            task.spawn(function()
+                task.wait(0.05) read()
+                task.wait(0.2)  read()
+            end)
+            for _, d in ipairs(child:GetDescendants()) do
+                if d:IsA("TextLabel") or d:IsA("TextButton") then
+                    d:GetPropertyChangedSignal("Text"):Connect(function()
+                        task.wait(0.05); read()
+                    end)
+                end
+            end
+        end
+        for _, c in ipairs(container:GetChildren()) do handle(c) end
+        container.ChildAdded:Connect(handle)
+    end
+
+    task.spawn(function()
+        local g = PG:WaitForChild("Popups", 30)
+        watchUI(g and g:WaitForChild("Popups", 30), "PopupUI")
+    end)
+    task.spawn(function()
+        local m = PG:WaitForChild("Main", 30)
+        watchUI(m and m:WaitForChild("BigPopup", 30), "BigPopupUI")
+    end)
+
+    print("[PopupTextLog] active")
+end
 
 -- ============================================
 -- INIT
